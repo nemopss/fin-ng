@@ -1,34 +1,34 @@
 package main
 
 import (
+	"log"
+	"os"
+
 	"github.com/gin-gonic/gin"
-	"net/http"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
+	"github.com/nemopss/fin-ng/backend/api"
+	"github.com/nemopss/fin-ng/backend/db"
 )
 
-type Transaction struct {
-	ID     int     `json:"id"`
-	Amount float64 `json:"amount"`
-	Type   string  `json:"type"`
-}
-
-var transactions = []Transaction{}
-
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	// Подключение к PostgreSQL
+	connStr := os.Getenv("POSTGRES_URL")
+	storage, err := db.NewStorage(connStr)
+	if err != nil {
+		panic(err)
+	}
+	defer storage.Close()
+
+	handler := api.NewHandler(storage)
+
 	r := gin.Default()
-
-	r.GET("/transactions", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, transactions)
-	})
-
-	r.POST("/transactions", func(ctx *gin.Context) {
-		var newTransaction Transaction
-		if err := ctx.ShouldBindJSON(&newTransaction); err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		transactions = append(transactions, newTransaction)
-		ctx.JSON(http.StatusCreated, newTransaction)
-	})
+	r.GET("/transactions", handler.GetTransactions)
+	r.POST("/transactions", handler.CreateTransaction)
 
 	r.Run()
 }
