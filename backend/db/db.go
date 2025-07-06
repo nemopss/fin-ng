@@ -53,6 +53,33 @@ func (s *Storage) GetTransactions() ([]models.Transaction, error) {
 	return transactions, nil
 }
 
+func (s *Storage) GetTransaction(id int) (*models.Transaction, error) {
+	var t models.Transaction
+
+	row := s.DB.QueryRow("SELECT id, amount, type FROM transactions WHERE id = ($1)", id)
+	err := row.Scan(&t.ID, &t.Amount, &t.Type)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &t, nil
+}
+
 func (s *Storage) CreateTransaction(t *models.Transaction) error {
 	return s.DB.QueryRow("INSERT INTO transactions (amount, type) VALUES ($1, $2) RETURNING id", t.Amount, t.Type).Scan(&t.ID)
+}
+
+func (s *Storage) DeleteTransaction(id int) (bool, error) {
+	result, err := s.DB.Exec("DELETE FROM transactions WHERE id = ($1) RETURNING id", id)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
 }

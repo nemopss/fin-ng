@@ -36,6 +36,8 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *db.Storage) {
 	r := gin.Default()
 	r.GET("/transactions", handler.GetTransactions)
 	r.POST("/transactions", handler.CreateTransaction)
+	r.DELETE("/transaction/:id", handler.DeleteTransaction)
+	r.GET("/transaction/:id", handler.GetTransaction)
 
 	return r, storage
 }
@@ -102,5 +104,81 @@ func TestCreateTransaction(t *testing.T) {
 	}
 	if len(transactions) != 1 {
 		t.Errorf("Expected 1 transaction in DB, got %d", len(transactions))
+	}
+}
+
+func TestGetTransaction(t *testing.T) {
+	r, storage := setupTestHandler(t)
+	defer storage.Close()
+
+	// Добавляем тестовую транзакцию
+	transaction := &models.Transaction{Amount: 300.25, Type: "income"}
+	if err := storage.CreateTransaction(transaction); err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	// Тест успешного получения транзакции
+	req, _ := http.NewRequest("GET", "/transaction/1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var fetchedTransaction models.Transaction
+	if err := json.NewDecoder(w.Body).Decode(&fetchedTransaction); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if fetchedTransaction.Amount != 300.25 || fetchedTransaction.Type != "income" {
+		t.Errorf("Expected transaction {Amount: 300.25, Type: income}, got %+v", fetchedTransaction)
+	}
+
+	// Тест получения несуществующей транзакции
+	req, _ = http.NewRequest("GET", "/transaction/999", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+}
+
+func TestDeleteTransaction(t *testing.T) {
+	r, storage := setupTestHandler(t)
+	defer storage.Close()
+
+	// Добавляем тестовую транзакцию
+	transaction := &models.Transaction{Amount: 400.50, Type: "expense"}
+	if err := storage.CreateTransaction(transaction); err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	// Тест успешного удаления транзакции
+	req, _ := http.NewRequest("DELETE", "/transaction/1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("Expected status %d, got %d", http.StatusNoContent, w.Code)
+	}
+
+	// Проверяем, что транзакция удалена
+	transactions, err := storage.GetTransactions()
+	if err != nil {
+		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if len(transactions) != 0 {
+		t.Errorf("Expected 0 transactions, got %d", len(transactions))
+	}
+
+	// Тест удаления несуществующей транзакции
+	req, _ = http.NewRequest("DELETE", "/transaction/999", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, w.Code)
 	}
 }

@@ -28,7 +28,9 @@ func main() {
 
 	r := gin.Default()
 	r.GET("/transactions", handler.GetTransactions)
+	r.GET("/transaction/:id", handler.GetTransaction)
 	r.POST("/transactions", handler.CreateTransaction)
+	r.DELETE("/transaction/:id", handler.DeleteTransaction)
 
 	r.Run()
 }
