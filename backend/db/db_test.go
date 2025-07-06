@@ -125,3 +125,46 @@ func TestDeleteTransaction(t *testing.T) {
 		t.Error("Expected no deletion for non-existent transaction, got true")
 	}
 }
+
+func TestUpdateTransaction(t *testing.T) {
+	store := setupTestDB(t)
+	defer store.Close()
+
+	// Создаем тестовую транзакцию
+	transaction := &models.Transaction{Amount: 500.00, Type: "income"}
+	if err := store.CreateTransaction(transaction); err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	// Тест успешного обновления
+	updatedTransaction := &models.Transaction{ID: transaction.ID, Amount: 600.25, Type: "expense"}
+	updated, err := store.UpdateTransaction(updatedTransaction)
+	if err != nil {
+		t.Fatalf("Failed to update transaction: %v", err)
+	}
+	if !updated {
+		t.Error("Expected transaction to be updated, got false")
+	}
+
+	// Проверяем, что транзакция обновлена
+	fetched, err := store.GetTransaction(transaction.ID)
+	if err != nil {
+		t.Fatalf("Failed to get transaction: %v", err)
+	}
+	if fetched == nil {
+		t.Error("Expected transaction, got nil")
+	}
+	if fetched.Amount != 600.25 || fetched.Type != "expense" {
+		t.Errorf("Expected transaction {Amount: 600.25, Type: expense}, got %+v", fetched)
+	}
+
+	// Тест обновления несуществующей транзакции
+	nonExistent := &models.Transaction{ID: 999, Amount: 100.00, Type: "income"}
+	updated, err = store.UpdateTransaction(nonExistent)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if updated {
+		t.Error("Expected no update for non-existent transaction, got true")
+	}
+}

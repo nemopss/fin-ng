@@ -38,6 +38,7 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *db.Storage) {
 	r.POST("/transactions", handler.CreateTransaction)
 	r.DELETE("/transaction/:id", handler.DeleteTransaction)
 	r.GET("/transaction/:id", handler.GetTransaction)
+	r.PUT("/transaction/:id", handler.UpdateTransaction)
 
 	return r, storage
 }
@@ -175,6 +176,49 @@ func TestDeleteTransaction(t *testing.T) {
 
 	// Тест удаления несуществующей транзакции
 	req, _ = http.NewRequest("DELETE", "/transaction/999", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+}
+
+func TestUpdateTransaction(t *testing.T) {
+	r, storage := setupTestHandler(t)
+	defer storage.Close()
+
+	// Добавляем тестовую транзакцию
+	transaction := &models.Transaction{Amount: 500.00, Type: "income"}
+	if err := storage.CreateTransaction(transaction); err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	// Тест успешного обновления транзакции
+	updatedTransaction := models.Transaction{Amount: 600.55, Type: "expense"}
+	body, _ := json.Marshal(updatedTransaction)
+	req, _ := http.NewRequest("PUT", "/transaction/1", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var fetchedTransaction models.Transaction
+	if err := json.NewDecoder(w.Body).Decode(&fetchedTransaction); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if fetchedTransaction.Amount != 600.55 || fetchedTransaction.Type != "expense" {
+		t.Errorf("Expected transaction {Amount: 600.25, Type: expense}, got %+v", fetchedTransaction)
+	}
+
+	// Тест обновления несуществующей транзакции
+	body, _ = json.Marshal(updatedTransaction)
+	req, _ = http.NewRequest("PUT", "/transaction/999", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

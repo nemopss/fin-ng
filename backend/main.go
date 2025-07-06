@@ -31,6 +31,7 @@ func main() {
 	r.GET("/transaction/:id", handler.GetTransaction)
 	r.POST("/transactions", handler.CreateTransaction)
 	r.DELETE("/transaction/:id", handler.DeleteTransaction)
+	r.PUT("/transaction/:id", handler.UpdateTransaction)
 
 	r.Run()
 }
