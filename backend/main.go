@@ -24,14 +24,24 @@ func main() {
 	}
 	defer storage.Close()
 
-	handler := api.NewHandler(storage)
+	// Получение JWT_SECRET из .env
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET is required")
+	}
+
+	handler := api.NewHandler(storage, jwtSecret)
 
 	r := gin.Default()
-	r.GET("/transactions", handler.GetTransactions)
-	r.GET("/transaction/:id", handler.GetTransaction)
-	r.POST("/transactions", handler.CreateTransaction)
-	r.DELETE("/transaction/:id", handler.DeleteTransaction)
-	r.PUT("/transaction/:id", handler.UpdateTransaction)
+	r.POST("/register", handler.Register)
+	r.POST("/login", handler.Login)
+
+	protected := r.Group("/", handler.AuthMiddleware())
+	protected.GET("/transactions", handler.GetTransactions)
+	protected.GET("/transaction/:id", handler.GetTransaction)
+	protected.POST("/transactions", handler.CreateTransaction)
+	protected.DELETE("/transaction/:id", handler.DeleteTransaction)
+	protected.PUT("/transaction/:id", handler.UpdateTransaction)
 
 	r.Run()
 }

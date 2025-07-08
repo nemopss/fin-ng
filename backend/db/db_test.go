@@ -8,6 +8,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/nemopss/fin-ng/backend/models"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func setupTestDB(t *testing.T) *Storage {
@@ -22,7 +23,7 @@ func setupTestDB(t *testing.T) *Storage {
 	}
 
 	// Очистка таблицы перед тестом
-	_, err = store.DB.Exec("TRUNCATE TABLE transactions RESTART IDENTITY")
+	_, err = store.DB.Exec("TRUNCATE TABLE transactions, users RESTART IDENTITY CASCADE")
 	if err != nil {
 		t.Fatalf("Failed to truncate table: %v", err)
 	}
@@ -30,13 +31,66 @@ func setupTestDB(t *testing.T) *Storage {
 	return store
 }
 
+func TestCreateAndGetUser(t *testing.T) {
+	store := setupTestDB(t)
+	defer store.Close()
+
+	// Тест создания пользователя
+	user, err := store.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+	if user.ID == 0 {
+		t.Error("Expected user ID to be set, got 0")
+	}
+	if user.Username != "testuser" {
+		t.Errorf("Expected username 'testuser', got %s", user.Username)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte("password123")); err != nil {
+		t.Error("Password hash does not match")
+	}
+
+	// Тест получения пользователя
+	fetchedUser, err := store.GetUserByUsername("testuser")
+	if err != nil {
+		t.Fatalf("Failed to get user: %v", err)
+	}
+	if fetchedUser == nil {
+		t.Error("Expected user, got nil")
+	}
+	if fetchedUser.ID != user.ID || fetchedUser.Username != "testuser" {
+		t.Errorf("Expected user {ID: %d, Username: testuser}, got %+v", user.ID, fetchedUser)
+	}
+
+	// Тест получения несуществующего пользователя
+	fetchedUser, err = store.GetUserByUsername("nonexistent")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if fetchedUser != nil {
+		t.Errorf("Expected nil user, got %+v", fetchedUser)
+	}
+
+	// Тест валидации: короткий пароль
+	_, err = store.CreateUser("testuser2", "short")
+	if err == nil || err.Error() != "password must be at least 6 characters" {
+		t.Errorf("Expected error 'password must be at least 6 characters', got %v", err)
+	}
+}
+
 func TestCreateAndGetTransactions(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
+	// Создаем пользователя
+	user, err := store.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
 	// Тест создания транзакции
-	transaction := &models.Transaction{Amount: 200.50, Type: "expense", Date: time.Now()}
-	err := store.CreateTransaction(transaction)
+	transaction := &models.Transaction{UserID: user.ID, Amount: 200.50, Type: "expense", Date: time.Now()}
+	err = store.CreateTransaction(transaction)
 	if err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
@@ -45,15 +99,15 @@ func TestCreateAndGetTransactions(t *testing.T) {
 	}
 
 	// Тест получения транзакций
-	transactions, err := store.GetTransactions("", 0, 0, "")
+	transactions, err := store.GetTransactions(user.ID, "", 0, 0, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
 	if len(transactions) != 1 {
 		t.Errorf("Expected 1 transaction, got %d", len(transactions))
 	}
-	if transactions[0].Amount != 200.50 || transactions[0].Type != "expense" {
-		t.Errorf("Expected transaction {Amount: 200.50, Type: expense}, got %+v", transactions[0])
+	if transactions[0].UserID != user.ID || transactions[0].Amount != 200.50 || transactions[0].Type != "expense" {
+		t.Errorf("Expected transaction {UserID: %d, Amount: 200.50, Type: expense}, got %+v", user.ID, transactions[0])
 	}
 }
 
@@ -61,26 +115,32 @@ func TestGetTransaction(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
+	// Создаем пользователя
+	user, err := store.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
 	// Создаем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 300.75, Type: "income", Date: time.Now()}
+	transaction := &models.Transaction{UserID: user.ID, Amount: 300.75, Type: "income", Date: time.Now()}
 	if err := store.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
 
 	// Тест успешного получения транзакции
-	fetched, err := store.GetTransaction(transaction.ID)
+	fetched, err := store.GetTransaction(transaction.ID, user.ID)
 	if err != nil {
 		t.Fatalf("Failed to get transaction: %v", err)
 	}
 	if fetched == nil {
 		t.Error("Expected transaction, got nil")
 	}
-	if fetched.Amount != 300.75 || fetched.Type != "income" {
-		t.Errorf("Expected transaction {Amount: 300.75, Type: income}, got %+v", fetched)
+	if fetched.UserID != user.ID || fetched.Amount != 300.75 || fetched.Type != "income" {
+		t.Errorf("Expected transaction {UserID: %d, Amount: 300.75, Type: income}, got %+v", user.ID, fetched)
 	}
 
 	// Тест получения несуществующей транзакции
-	fetched, err = store.GetTransaction(999)
+	fetched, err = store.GetTransaction(999, user.ID)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -93,14 +153,20 @@ func TestDeleteTransaction(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
+	// Создаем пользователя
+	user, err := store.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
 	// Создаем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 400.50, Type: "expense"}
+	transaction := &models.Transaction{UserID: user.ID, Amount: 400.50, Type: "expense"}
 	if err := store.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
 
 	// Тест успешного удаления
-	deleted, err := store.DeleteTransaction(transaction.ID)
+	deleted, err := store.DeleteTransaction(transaction.ID, user.ID)
 	if err != nil {
 		t.Fatalf("Failed to delete transaction: %v", err)
 	}
@@ -109,7 +175,7 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 
 	// Проверяем, что транзакция удалена
-	transactions, err := store.GetTransactions("", 0, 0, "")
+	transactions, err := store.GetTransactions(user.ID, "", 0, 0, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -118,7 +184,7 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 
 	// Тест удаления несуществующей транзакции
-	deleted, err = store.DeleteTransaction(999)
+	deleted, err = store.DeleteTransaction(999, user.ID)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -131,14 +197,20 @@ func TestUpdateTransaction(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
+	// Создаем пользователя
+	user, err := store.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
 	// Создаем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 500.00, Type: "income", Date: time.Now()}
+	transaction := &models.Transaction{UserID: user.ID, Amount: 500.00, Type: "income", Date: time.Now()}
 	if err := store.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
 
 	// Тест успешного обновления
-	updatedTransaction := &models.Transaction{ID: transaction.ID, Amount: 600.25, Type: "expense", Date: time.Now().Add(time.Hour)}
+	updatedTransaction := &models.Transaction{ID: transaction.ID, UserID: user.ID, Amount: 600.25, Type: "expense", Date: time.Now().Add(time.Hour)}
 	updated, err := store.UpdateTransaction(updatedTransaction)
 	if err != nil {
 		t.Fatalf("Failed to update transaction: %v", err)
@@ -148,19 +220,19 @@ func TestUpdateTransaction(t *testing.T) {
 	}
 
 	// Проверяем, что транзакция обновлена
-	fetched, err := store.GetTransaction(transaction.ID)
+	fetched, err := store.GetTransaction(transaction.ID, user.ID)
 	if err != nil {
 		t.Fatalf("Failed to get transaction: %v", err)
 	}
 	if fetched == nil {
 		t.Error("Expected transaction, got nil")
 	}
-	if fetched.Amount != 600.25 || fetched.Type != "expense" {
+	if fetched.UserID != user.ID || fetched.Amount != 600.25 || fetched.Type != "expense" {
 		t.Errorf("Expected transaction {Amount: 600.25, Type: expense}, got %+v", fetched)
 	}
 
 	// Тест обновления несуществующей транзакции
-	nonExistent := &models.Transaction{ID: 999, Amount: 100.00, Type: "income", Date: time.Now()}
+	nonExistent := &models.Transaction{ID: 999, UserID: user.ID, Amount: 100.00, Type: "income", Date: time.Now()}
 	updated, err = store.UpdateTransaction(nonExistent)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -174,12 +246,18 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
+	// Создаем пользователя
+	user, err := store.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
 	// Создаем тестовые транзакции
 	now := time.Now()
 	transactions := []models.Transaction{
-		{Amount: 100.50, Type: "income", Date: now.Add(-2 * time.Hour)},
-		{Amount: 200.75, Type: "expense", Date: now.Add(-1 * time.Hour)},
-		{Amount: 300.00, Type: "income", Date: now},
+		{UserID: user.ID, Amount: 100.50, Type: "income", Date: now.Add(-2 * time.Hour)},
+		{UserID: user.ID, Amount: 200.75, Type: "expense", Date: now.Add(-1 * time.Hour)},
+		{UserID: user.ID, Amount: 300.00, Type: "income", Date: now},
 	}
 	for _, tx := range transactions {
 		if err := store.CreateTransaction(&tx); err != nil {
@@ -188,7 +266,7 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест фильтрации по type
-	result, err := store.GetTransactions("income", 0, 0, "")
+	result, err := store.GetTransactions(user.ID, "income", 0, 0, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -202,7 +280,7 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест фильтрации по min_amount
-	result, err = store.GetTransactions("", 150, 0, "")
+	result, err = store.GetTransactions(user.ID, "", 150, 0, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -216,7 +294,7 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест фильтрации по max_amount
-	result, err = store.GetTransactions("", 0, 250, "")
+	result, err = store.GetTransactions(user.ID, "", 0, 250, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -230,7 +308,7 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест сортировки по date (desc)
-	result, err = store.GetTransactions("", 0, 0, "desc")
+	result, err = store.GetTransactions(user.ID, "", 0, 0, "desc")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -244,7 +322,7 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест комбинированного фильтра
-	result, err = store.GetTransactions("income", 100, 250, "asc")
+	result, err = store.GetTransactions(user.ID, "income", 100, 250, "asc")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -256,13 +334,13 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест неверного type
-	_, err = store.GetTransactions("invalid", 0, 0, "")
+	_, err = store.GetTransactions(user.ID, "invalid", 0, 0, "")
 	if err == nil || err.Error() != "invalid type filter: must be 'income' or 'expense'" {
 		t.Errorf("Expected error 'invalid type filter', got %v", err)
 	}
 
 	// Тест неверного sort
-	_, err = store.GetTransactions("", 0, 0, "invalid")
+	_, err = store.GetTransactions(user.ID, "", 0, 0, "invalid")
 	if err == nil || err.Error() != "invalid sort parameter: must be 'asc' or 'desc'" {
 		t.Errorf("Expected error 'invalid sort parameter', got %v", err)
 	}

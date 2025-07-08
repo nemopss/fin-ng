@@ -7,16 +7,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/nemopss/fin-ng/backend/db"
 	"github.com/nemopss/fin-ng/backend/models"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Handler struct {
-	storage *db.Storage
+	storage   *db.Storage
+	jwtSecret string
 }
 
-func NewHandler(s *db.Storage) *Handler {
-	return &Handler{storage: s}
+func NewHandler(s *db.Storage, jwtSecret string) *Handler {
+	return &Handler{storage: s, jwtSecret: jwtSecret}
 }
 
 func validateTransaction(t models.Transaction) error {
@@ -29,7 +32,119 @@ func validateTransaction(t models.Transaction) error {
 	return nil
 }
 
+func (h *Handler) AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokenString := c.GetHeader("Authorization")
+		if tokenString == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authorization header required"})
+			c.Abort()
+			return
+		}
+
+		if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
+			tokenString = tokenString[7:]
+		}
+
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return []byte(h.jwtSecret), nil
+		})
+
+		if err != nil || !token.Valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+			c.Abort()
+			return
+		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token claims"})
+			c.Abort()
+			return
+		}
+
+		userID, ok := claims["user_id"].(float64)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user_id in token"})
+			c.Abort()
+			return
+		}
+
+		c.Set("user_id", int(userID))
+		c.Next()
+	}
+}
+
+func (h *Handler) Register(c *gin.Context) {
+	var user models.User
+	if err := c.ShouldBindJSON(&user); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if len(user.Password) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 6 characters"})
+		return
+	}
+
+	createdUser, err := h.storage.CreateUser(user.Username, user.Password)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"id": createdUser.ID, "username": createdUser.Username})
+}
+
+func (h *Handler) Login(c *gin.Context) {
+	var credentials struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&credentials); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user, err := h.storage.GetUserByUsername(credentials.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(credentials.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": user.ID,
+		"exp":     time.Now().Add(time.Hour * 24).Unix(),
+	})
+
+	tokenString, err := token.SignedString([]byte(h.jwtSecret))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"token": tokenString})
+}
+
 func (h *Handler) GetTransactions(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
 	filterType := c.Query("type")
 	minAmountStr := c.Query("min_amount")
 	maxAmountStr := c.Query("max_amount")
@@ -64,7 +179,7 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 		return
 	}
 
-	transactions, err := h.storage.GetTransactions(filterType, minAmount, maxAmount, sort)
+	transactions, err := h.storage.GetTransactions(userID.(int), filterType, minAmount, maxAmount, sort)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -73,6 +188,12 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 }
 
 func (h *Handler) GetTransaction(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -80,7 +201,7 @@ func (h *Handler) GetTransaction(c *gin.Context) {
 		return
 	}
 
-	transaction, err := h.storage.GetTransaction(id)
+	transaction, err := h.storage.GetTransaction(id, userID.(int))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error in get transaction": err.Error()})
 		return
@@ -93,6 +214,12 @@ func (h *Handler) GetTransaction(c *gin.Context) {
 }
 
 func (h *Handler) CreateTransaction(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
 	var newTransaction = models.Transaction{}
 	if err := c.ShouldBindJSON(&newTransaction); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -104,6 +231,7 @@ func (h *Handler) CreateTransaction(c *gin.Context) {
 		return
 	}
 
+	newTransaction.UserID = userID.(int)
 	if newTransaction.Date.IsZero() {
 		newTransaction.Date = time.Now()
 	}
@@ -118,6 +246,12 @@ func (h *Handler) CreateTransaction(c *gin.Context) {
 }
 
 func (h *Handler) DeleteTransaction(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -125,7 +259,7 @@ func (h *Handler) DeleteTransaction(c *gin.Context) {
 		return
 	}
 
-	ok, err := h.storage.DeleteTransaction(id)
+	ok, err := h.storage.DeleteTransaction(id, userID.(int))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -139,6 +273,12 @@ func (h *Handler) DeleteTransaction(c *gin.Context) {
 }
 
 func (h *Handler) UpdateTransaction(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -151,6 +291,7 @@ func (h *Handler) UpdateTransaction(c *gin.Context) {
 		return
 	}
 	updatedTransaction.ID = id
+	updatedTransaction.UserID = userID.(int)
 
 	if err := validateTransaction(updatedTransaction); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
