@@ -22,10 +22,10 @@ func setupTestDB(t *testing.T) *Storage {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
 
-	// Очистка таблицы перед тестом
+	// Очистка таблиц перед тестом
 	_, err = store.DB.Exec("TRUNCATE TABLE transactions, users RESTART IDENTITY CASCADE")
 	if err != nil {
-		t.Fatalf("Failed to truncate table: %v", err)
+		t.Fatalf("Failed to truncate tables: %v", err)
 	}
 
 	return store
@@ -99,9 +99,12 @@ func TestCreateAndGetTransactions(t *testing.T) {
 	}
 
 	// Тест получения транзакций
-	transactions, err := store.GetTransactions(user.ID, "", 0, 0, "")
+	transactions, total, err := store.GetTransactions(user.ID, "", 0, 0, "", 1, 10)
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("Expected total 1, got %d", total)
 	}
 	if len(transactions) != 1 {
 		t.Errorf("Expected 1 transaction, got %d", len(transactions))
@@ -160,7 +163,7 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 
 	// Создаем тестовую транзакцию
-	transaction := &models.Transaction{UserID: user.ID, Amount: 400.50, Type: "expense"}
+	transaction := &models.Transaction{UserID: user.ID, Amount: 400.50, Type: "expense", Date: time.Now()}
 	if err := store.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
@@ -175,9 +178,12 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 
 	// Проверяем, что транзакция удалена
-	transactions, err := store.GetTransactions(user.ID, "", 0, 0, "")
+	transactions, total, err := store.GetTransactions(user.ID, "", 0, 0, "", 1, 10)
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("Expected total 0, got %d", total)
 	}
 	if len(transactions) != 0 {
 		t.Errorf("Expected 0 transactions, got %d", len(transactions))
@@ -228,7 +234,7 @@ func TestUpdateTransaction(t *testing.T) {
 		t.Error("Expected transaction, got nil")
 	}
 	if fetched.UserID != user.ID || fetched.Amount != 600.25 || fetched.Type != "expense" {
-		t.Errorf("Expected transaction {Amount: 600.25, Type: expense}, got %+v", fetched)
+		t.Errorf("Expected transaction {UserID: %d, Amount: 600.25, Type: expense}, got %+v", user.ID, fetched)
 	}
 
 	// Тест обновления несуществующей транзакции
@@ -242,7 +248,7 @@ func TestUpdateTransaction(t *testing.T) {
 	}
 }
 
-func TestGetTransactionsWithFilters(t *testing.T) {
+func TestGetTransactionsWithFiltersAndPagination(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
@@ -255,9 +261,10 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	// Создаем тестовые транзакции
 	now := time.Now()
 	transactions := []models.Transaction{
-		{UserID: user.ID, Amount: 100.50, Type: "income", Date: now.Add(-2 * time.Hour)},
-		{UserID: user.ID, Amount: 200.75, Type: "expense", Date: now.Add(-1 * time.Hour)},
-		{UserID: user.ID, Amount: 300.00, Type: "income", Date: now},
+		{UserID: user.ID, Amount: 100.50, Type: "income", Date: now.Add(-3 * time.Hour)},
+		{UserID: user.ID, Amount: 200.75, Type: "expense", Date: now.Add(-2 * time.Hour)},
+		{UserID: user.ID, Amount: 300.00, Type: "income", Date: now.Add(-1 * time.Hour)},
+		{UserID: user.ID, Amount: 400.25, Type: "expense", Date: now},
 	}
 	for _, tx := range transactions {
 		if err := store.CreateTransaction(&tx); err != nil {
@@ -265,24 +272,58 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 		}
 	}
 
-	// Тест фильтрации по type
-	result, err := store.GetTransactions(user.ID, "income", 0, 0, "")
+	// Тест пагинации: первая страница, limit=2
+	result, total, err := store.GetTransactions(user.ID, "", 0, 0, "asc", 1, 2)
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 4 {
+		t.Errorf("Expected total 4, got %d", total)
 	}
 	if len(result) != 2 {
 		t.Errorf("Expected 2 transactions, got %d", len(result))
 	}
-	for _, tx := range result {
-		if tx.Type != "income" {
-			t.Errorf("Expected type 'income', got %s", tx.Type)
-		}
+	if result[0].Amount != 100.50 || result[1].Amount != 200.75 {
+		t.Errorf("Expected transactions [100.50, 200.75], got %+v", result)
 	}
 
-	// Тест фильтрации по min_amount
-	result, err = store.GetTransactions(user.ID, "", 150, 0, "")
+	// Тест пагинации: вторая страница, limit=2
+	result, total, err = store.GetTransactions(user.ID, "", 0, 0, "asc", 2, 2)
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 4 {
+		t.Errorf("Expected total 4, got %d", total)
+	}
+	if len(result) != 2 {
+		t.Errorf("Expected 2 transactions, got %d", len(result))
+	}
+	if result[0].Amount != 300.00 || result[1].Amount != 400.25 {
+		t.Errorf("Expected transactions [300.00, 400.25], got %+v", result)
+	}
+
+	// Тест фильтрации по type с пагинацией
+	result, total, err = store.GetTransactions(user.ID, "income", 0, 0, "", 1, 1)
+	if err != nil {
+		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("Expected total 2, got %d", total)
+	}
+	if len(result) != 1 {
+		t.Errorf("Expected 1 transaction, got %d", len(result))
+	}
+	if result[0].Type != "income" {
+		t.Errorf("Expected type 'income', got %s", result[0].Type)
+	}
+
+	// Тест фильтрации по min_amount с пагинацией
+	result, total, err = store.GetTransactions(user.ID, "", 150, 0, "", 1, 2)
+	if err != nil {
+		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("Expected total 3, got %d", total)
 	}
 	if len(result) != 2 {
 		t.Errorf("Expected 2 transactions, got %d", len(result))
@@ -293,38 +334,28 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 		}
 	}
 
-	// Тест фильтрации по max_amount
-	result, err = store.GetTransactions(user.ID, "", 0, 250, "")
+	// Тест сортировки по date (desc) с пагинацией
+	result, total, err = store.GetTransactions(user.ID, "", 0, 0, "desc", 1, 2)
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
+	}
+	if total != 4 {
+		t.Errorf("Expected total 4, got %d", total)
 	}
 	if len(result) != 2 {
 		t.Errorf("Expected 2 transactions, got %d", len(result))
 	}
-	for _, tx := range result {
-		if tx.Amount > 250 {
-			t.Errorf("Expected amount <= 250, got %f", tx.Amount)
-		}
+	if result[0].Amount != 400.25 || result[1].Amount != 300.00 {
+		t.Errorf("Expected transactions [400.25, 300.00], got %+v", result)
 	}
 
-	// Тест сортировки по date (desc)
-	result, err = store.GetTransactions(user.ID, "", 0, 0, "desc")
+	// Тест комбинированного фильтра с пагинацией
+	result, total, err = store.GetTransactions(user.ID, "income", 100, 250, "asc", 1, 1)
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
-	if len(result) != 3 {
-		t.Errorf("Expected 3 transactions, got %d", len(result))
-	}
-	for i := 1; i < len(result); i++ {
-		if result[i].Date.After(result[i-1].Date) {
-			t.Errorf("Expected transactions sorted by date desc, got %v before %v", result[i].Date, result[i-1].Date)
-		}
-	}
-
-	// Тест комбинированного фильтра
-	result, err = store.GetTransactions(user.ID, "income", 100, 250, "asc")
-	if err != nil {
-		t.Fatalf("Failed to get transactions: %v", err)
+	if total != 1 {
+		t.Errorf("Expected total 1, got %d", total)
 	}
 	if len(result) != 1 {
 		t.Errorf("Expected 1 transaction, got %d", len(result))
@@ -334,13 +365,13 @@ func TestGetTransactionsWithFilters(t *testing.T) {
 	}
 
 	// Тест неверного type
-	_, err = store.GetTransactions(user.ID, "invalid", 0, 0, "")
+	_, _, err = store.GetTransactions(user.ID, "invalid", 0, 0, "", 1, 10)
 	if err == nil || err.Error() != "invalid type filter: must be 'income' or 'expense'" {
 		t.Errorf("Expected error 'invalid type filter', got %v", err)
 	}
 
 	// Тест неверного sort
-	_, err = store.GetTransactions(user.ID, "", 0, 0, "invalid")
+	_, _, err = store.GetTransactions(user.ID, "", 0, 0, "invalid", 1, 10)
 	if err == nil || err.Error() != "invalid sort parameter: must be 'asc' or 'desc'" {
 		t.Errorf("Expected error 'invalid sort parameter', got %v", err)
 	}

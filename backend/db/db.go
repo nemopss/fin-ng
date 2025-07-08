@@ -93,14 +93,14 @@ func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 	return &user, nil
 }
 
-func (s *Storage) GetTransactions(userID int, filterType string, minAmount, maxAmount float64, sort string) ([]models.Transaction, error) {
-	query := "SELECT id, user_id, amount, type, date FROM transactions WHERE user_id = $1"
+func (s *Storage) GetTransactions(userID int, filterType string, minAmount, maxAmount float64, sort string, page, limit int) ([]models.Transaction, int, error) {
+	countQuery := "SELECT COUNT(*) FROM transactions WHERE user_id = $1"
 	args := []interface{}{userID}
 	var conditions []string
 
 	if filterType != "" {
 		if filterType != "income" && filterType != "expense" {
-			return nil, fmt.Errorf("invalid type filter: must be 'income' or 'expense'")
+			return nil, 0, fmt.Errorf("invalid type filter: must be 'income' or 'expense'")
 		}
 		conditions = append(conditions, fmt.Sprintf("type = $%d", len(args)+1))
 		args = append(args, filterType)
@@ -117,18 +117,33 @@ func (s *Storage) GetTransactions(userID int, filterType string, minAmount, maxA
 	}
 
 	if len(conditions) > 0 {
+		countQuery += " AND " + strings.Join(conditions, " AND ")
+	}
+
+	var total int
+	err := s.DB.QueryRow(countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Запрос транзакций с пагинацией
+	query := "SELECT id, user_id, amount, type, date FROM transactions WHERE user_id = $1"
+	if len(conditions) > 0 {
 		query += " AND " + strings.Join(conditions, " AND ")
 	}
 
 	if sort == "asc" || sort == "desc" {
 		query += fmt.Sprintf(" ORDER BY date %s", sort)
 	} else if sort != "" {
-		return nil, fmt.Errorf("invalid sort parameter: must be 'asc' or 'desc'")
+		return nil, 0, fmt.Errorf("invalid sort parameter: must be 'asc' or 'desc'")
 	}
+
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, limit, (page-1)*limit)
 
 	rows, err := s.DB.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var transactions = []models.Transaction{}
@@ -136,11 +151,11 @@ func (s *Storage) GetTransactions(userID int, filterType string, minAmount, maxA
 		var t models.Transaction
 		err := rows.Scan(&t.ID, &t.UserID, &t.Amount, &t.Type, &t.Date)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		transactions = append(transactions, t)
 	}
-	return transactions, nil
+	return transactions, total, nil
 }
 
 func (s *Storage) GetTransaction(id, userID int) (*models.Transaction, error) {

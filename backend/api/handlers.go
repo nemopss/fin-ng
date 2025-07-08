@@ -149,8 +149,11 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 	minAmountStr := c.Query("min_amount")
 	maxAmountStr := c.Query("max_amount")
 	sort := c.Query("sort")
+	pageStr := c.Query("page")
+	limitStr := c.Query("limit")
 
 	var minAmount, maxAmount float64
+	var page, limit int
 	var err error
 
 	if minAmountStr != "" {
@@ -179,12 +182,36 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 		return
 	}
 
-	transactions, err := h.storage.GetTransactions(userID.(int), filterType, minAmount, maxAmount, sort)
+	if pageStr == "" {
+		page = 1
+	} else {
+		page, err = strconv.Atoi(pageStr)
+		if err != nil || page < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page must be a positive integer"})
+			return
+		}
+	}
+
+	if limitStr == "" {
+		limit = 10
+	} else {
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil || limit < 1 || limit > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 100"})
+			return
+		}
+	}
+
+	transactions, total, err := h.storage.GetTransactions(userID.(int), filterType, minAmount, maxAmount, sort, page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, transactions)
+
+	c.JSON(http.StatusOK, gin.H{
+		"transactions": transactions,
+		"total":        total,
+	})
 }
 
 func (h *Handler) GetTransaction(c *gin.Context) {
