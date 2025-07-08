@@ -72,6 +72,7 @@ func TestGetTransactions(t *testing.T) {
 	if transactions[0].Amount != 100.50 || transactions[0].Type != "income" {
 		t.Errorf("Expected transaction {Amount: 100.50, Type: income}, got %+v", transactions[0])
 	}
+
 }
 
 func TestCreateTransaction(t *testing.T) {
@@ -106,6 +107,45 @@ func TestCreateTransaction(t *testing.T) {
 	if len(transactions) != 1 {
 		t.Errorf("Expected 1 transaction in DB, got %d", len(transactions))
 	}
+
+	// Тест валидации: неверный amount
+	invalidTransaction := models.Transaction{Amount: -100, Type: "expense"}
+	body, _ = json.Marshal(invalidTransaction)
+	req, _ = http.NewRequest("POST", "/transactions", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+	var errorResponse gin.H
+	if err := json.NewDecoder(w.Body).Decode(&errorResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if errorResponse["error"] != "amount must be positive" {
+		t.Errorf("Expected error 'amount must be positive', got %v", errorResponse["error"])
+	}
+
+	// Тест валидации: неверный type
+	invalidTransaction = models.Transaction{Amount: 100, Type: "invalid"}
+	body, _ = json.Marshal(invalidTransaction)
+	req, _ = http.NewRequest("POST", "/transactions", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&errorResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if errorResponse["error"] != "type must be 'income' or 'expense'" {
+		t.Errorf("Expected error 'type must be 'income' or 'expense'', got %v", errorResponse["error"])
+	}
+
 }
 
 func TestGetTransaction(t *testing.T) {

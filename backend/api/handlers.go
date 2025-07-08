@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -15,6 +16,16 @@ type Handler struct {
 
 func NewHandler(s *db.Storage) *Handler {
 	return &Handler{storage: s}
+}
+
+func validateTransaction(t models.Transaction) error {
+	if t.Amount <= 0 {
+		return fmt.Errorf("amount must be positive")
+	}
+	if t.Type != "income" && t.Type != "expense" {
+		return fmt.Errorf("type must be 'income' or 'expense'")
+	}
+	return nil
 }
 
 func (h *Handler) GetTransactions(c *gin.Context) {
@@ -49,6 +60,11 @@ func (h *Handler) GetTransaction(c *gin.Context) {
 func (h *Handler) CreateTransaction(c *gin.Context) {
 	var newTransaction = models.Transaction{}
 	if err := c.ShouldBindJSON(&newTransaction); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := validateTransaction(newTransaction); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -96,6 +112,12 @@ func (h *Handler) UpdateTransaction(c *gin.Context) {
 		return
 	}
 	updatedTransaction.ID = id
+
+	if err := validateTransaction(updatedTransaction); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	ok, err := h.storage.UpdateTransaction(&updatedTransaction)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
