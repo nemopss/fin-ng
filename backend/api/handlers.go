@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nemopss/fin-ng/backend/db"
@@ -29,7 +30,41 @@ func validateTransaction(t models.Transaction) error {
 }
 
 func (h *Handler) GetTransactions(c *gin.Context) {
-	transactions, err := h.storage.GetTransactions()
+	filterType := c.Query("type")
+	minAmountStr := c.Query("min_amount")
+	maxAmountStr := c.Query("max_amount")
+	sort := c.Query("sort")
+
+	var minAmount, maxAmount float64
+	var err error
+
+	if minAmountStr != "" {
+		minAmount, err = strconv.ParseFloat(minAmountStr, 64)
+		if err != nil || minAmount < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid min_amount"})
+			return
+		}
+	}
+
+	if maxAmountStr != "" {
+		maxAmount, err = strconv.ParseFloat(maxAmountStr, 64)
+		if err != nil || maxAmount < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid max_amount"})
+			return
+		}
+	}
+
+	if filterType != "" && filterType != "income" && filterType != "expense" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type must be 'income' or 'expense'"})
+		return
+	}
+
+	if sort != "" && sort != "asc" && sort != "desc" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "sort must be 'asc' or 'desc'"})
+		return
+	}
+
+	transactions, err := h.storage.GetTransactions(filterType, minAmount, maxAmount, sort)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -67,6 +102,10 @@ func (h *Handler) CreateTransaction(c *gin.Context) {
 	if err := validateTransaction(newTransaction); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	if newTransaction.Date.IsZero() {
+		newTransaction.Date = time.Now()
 	}
 
 	if err := h.storage.CreateTransaction(&newTransaction); err != nil {
@@ -116,6 +155,10 @@ func (h *Handler) UpdateTransaction(c *gin.Context) {
 	if err := validateTransaction(updatedTransaction); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	if updatedTransaction.Date.IsZero() {
+		updatedTransaction.Date = time.Now()
 	}
 
 	ok, err := h.storage.UpdateTransaction(&updatedTransaction)

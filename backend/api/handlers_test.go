@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -44,13 +45,21 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *db.Storage) {
 }
 
 func TestGetTransactions(t *testing.T) {
-	r, store := setupTestHandler(t)
-	defer store.Close()
+	r, storage := setupTestHandler(t)
+	defer storage.Close()
 
-	// Добавляем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 100.50, Type: "income"}
-	if err := store.CreateTransaction(transaction); err != nil {
-		t.Fatalf("Failed to create transaction: %v", err)
+	// Добавляем тестовые транзакции
+	now := time.Now()
+	transactions := []models.Transaction{
+		{Amount: 100.50, Type: "income", Date: now.Add(-2 * time.Hour)},
+		{Amount: 200.75, Type: "expense", Date: now.Add(-1 * time.Hour)},
+		{Amount: 300.00, Type: "income", Date: now},
+	}
+
+	for _, tx := range transactions {
+		if err := storage.CreateTransaction(&tx); err != nil {
+			t.Fatalf("Failed to create transaction: %v", err)
+		}
 	}
 
 	req, _ := http.NewRequest("GET", "/transactions", nil)
@@ -61,25 +70,151 @@ func TestGetTransactions(t *testing.T) {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var transactions []models.Transaction
-	if err := json.NewDecoder(w.Body).Decode(&transactions); err != nil {
+	var transactionsResponse []models.Transaction
+	if err := json.NewDecoder(w.Body).Decode(&transactionsResponse); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	if len(transactions) != 1 {
-		t.Errorf("Expected 1 transaction, got %d", len(transactions))
-	}
-	if transactions[0].Amount != 100.50 || transactions[0].Type != "income" {
-		t.Errorf("Expected transaction {Amount: 100.50, Type: income}, got %+v", transactions[0])
+	if len(transactionsResponse) != 3 {
+		t.Errorf("Expected 3 transactions, got %d", len(transactionsResponse))
 	}
 
+	// Тест фильтрации по type
+	req, _ = http.NewRequest("GET", "/transactions?type=income", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&transactionsResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(transactionsResponse) != 2 {
+		t.Errorf("Expected 2 transactions, got %d", len(transactionsResponse))
+	}
+	for _, tx := range transactionsResponse {
+		if tx.Type != "income" {
+			t.Errorf("Expected type 'income', got %s", tx.Type)
+		}
+	}
+
+	// Тест фильтрации по min_amount
+	req, _ = http.NewRequest("GET", "/transactions?min_amount=150", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&transactionsResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(transactionsResponse) != 2 {
+		t.Errorf("Expected 2 transactions, got %d", len(transactionsResponse))
+	}
+	for _, tx := range transactionsResponse {
+		if tx.Amount < 150 {
+			t.Errorf("Expected amount >= 150, got %f", tx.Amount)
+		}
+	}
+
+	// Тест фильтрации по max_amount
+	req, _ = http.NewRequest("GET", "/transactions?max_amount=250", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&transactionsResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(transactionsResponse) != 2 {
+		t.Errorf("Expected 2 transactions, got %d", len(transactionsResponse))
+	}
+	for _, tx := range transactionsResponse {
+		if tx.Amount > 250 {
+			t.Errorf("Expected amount <= 250, got %f", tx.Amount)
+		}
+	}
+
+	// Тест сортировки по date (desc)
+	req, _ = http.NewRequest("GET", "/transactions?sort=desc", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&transactionsResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(transactionsResponse) != 3 {
+		t.Errorf("Expected 3 transactions, got %d", len(transactionsResponse))
+	}
+	for i := 1; i < len(transactionsResponse); i++ {
+		if transactionsResponse[i].Date.After(transactionsResponse[i-1].Date) {
+			t.Errorf("Expected transactions sorted by date desc, got %v before %v", transactionsResponse[i].Date, transactionsResponse[i-1].Date)
+		}
+	}
+
+	// Тест комбинированного фильтра
+	req, _ = http.NewRequest("GET", "/transactions?type=income&min_amount=100&max_amount=250&sort=asc", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&transactionsResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(transactionsResponse) != 1 {
+		t.Errorf("Expected 1 transaction, got %d", len(transactionsResponse))
+	}
+	if transactionsResponse[0].Amount != 100.50 || transactionsResponse[0].Type != "income" {
+		t.Errorf("Expected transaction {Amount: 100.50, Type: income}, got %+v", transactionsResponse[0])
+	}
+
+	// Тест неверного type
+	req, _ = http.NewRequest("GET", "/transactions?type=invalid", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	// Тест неверного min_amount
+	req, _ = http.NewRequest("GET", "/transactions?min_amount=invalid", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	// Тест неверного sort
+	req, _ = http.NewRequest("GET", "/transactions?sort=invalid", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
 }
 
 func TestCreateTransaction(t *testing.T) {
-	r, store := setupTestHandler(t)
-	defer store.Close()
+	r, storage := setupTestHandler(t)
+	defer storage.Close()
 
-	transaction := models.Transaction{Amount: 200.75, Type: "expense"}
+	transaction := models.Transaction{Amount: 200.75, Type: "expense", Date: time.Now()}
 	body, _ := json.Marshal(transaction)
 	req, _ := http.NewRequest("POST", "/transactions", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -100,7 +235,7 @@ func TestCreateTransaction(t *testing.T) {
 	}
 
 	// Проверяем, что транзакция сохранена в базе
-	transactions, err := store.GetTransactions()
+	transactions, err := storage.GetTransactions("", 0, 0, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -153,7 +288,7 @@ func TestGetTransaction(t *testing.T) {
 	defer storage.Close()
 
 	// Добавляем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 300.25, Type: "income"}
+	transaction := &models.Transaction{Amount: 300.25, Type: "income", Date: time.Now()}
 	if err := storage.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
@@ -191,7 +326,7 @@ func TestDeleteTransaction(t *testing.T) {
 	defer storage.Close()
 
 	// Добавляем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 400.50, Type: "expense"}
+	transaction := &models.Transaction{Amount: 400.50, Type: "expense", Date: time.Now()}
 	if err := storage.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
@@ -206,7 +341,7 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 
 	// Проверяем, что транзакция удалена
-	transactions, err := storage.GetTransactions()
+	transactions, err := storage.GetTransactions("", 0, 0, "")
 	if err != nil {
 		t.Fatalf("Failed to get transactions: %v", err)
 	}
@@ -229,13 +364,13 @@ func TestUpdateTransaction(t *testing.T) {
 	defer storage.Close()
 
 	// Добавляем тестовую транзакцию
-	transaction := &models.Transaction{Amount: 500.00, Type: "income"}
+	transaction := &models.Transaction{Amount: 500.00, Type: "income", Date: time.Now()}
 	if err := storage.CreateTransaction(transaction); err != nil {
 		t.Fatalf("Failed to create transaction: %v", err)
 	}
 
 	// Тест успешного обновления транзакции
-	updatedTransaction := models.Transaction{Amount: 600.55, Type: "expense"}
+	updatedTransaction := models.Transaction{Amount: 600.25, Type: "expense", Date: time.Now().Add(time.Hour)}
 	body, _ := json.Marshal(updatedTransaction)
 	req, _ := http.NewRequest("PUT", "/transaction/1", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -251,8 +386,46 @@ func TestUpdateTransaction(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	if fetchedTransaction.Amount != 600.55 || fetchedTransaction.Type != "expense" {
+	if fetchedTransaction.Amount != 600.25 || fetchedTransaction.Type != "expense" {
 		t.Errorf("Expected transaction {Amount: 600.25, Type: expense}, got %+v", fetchedTransaction)
+	}
+	// Тест валидации: неверный amount
+	invalidTransaction := models.Transaction{Amount: -100, Type: "expense", Date: time.Now()}
+	body, _ = json.Marshal(invalidTransaction)
+	req, _ = http.NewRequest("PUT", "/transaction/1", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	var errorResponse gin.H
+	if err := json.NewDecoder(w.Body).Decode(&errorResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if errorResponse["error"] != "amount must be positive" {
+		t.Errorf("Expected error 'amount must be positive', got %v", errorResponse["error"])
+	}
+
+	// Тест валидации: неверный type
+	invalidTransaction = models.Transaction{Amount: 100, Type: "invalid", Date: time.Now()}
+	body, _ = json.Marshal(invalidTransaction)
+	req, _ = http.NewRequest("PUT", "/transaction/1", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&errorResponse); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if errorResponse["error"] != "type must be 'income' or 'expense'" {
+		t.Errorf("Expected error 'type must be 'income' or 'expense'', got %v", errorResponse["error"])
 	}
 
 	// Тест обновления несуществующей транзакции
