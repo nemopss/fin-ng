@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,9 @@ func validateTransaction(t models.Transaction) error {
 	}
 	if t.Type != "income" && t.Type != "expense" {
 		return fmt.Errorf("type must be 'income' or 'expense'")
+	}
+	if t.CategoryID <= 0 {
+		return fmt.Errorf("category_id is required and must be positive")
 	}
 	return nil
 }
@@ -138,6 +142,117 @@ func (h *Handler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"token": tokenString})
 }
 
+func (h *Handler) CreateCategory(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
+	var category models.Category
+	if err := c.ShouldBindJSON(&category); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if category.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category name is required"})
+		return
+	}
+
+	createdCategory, err := h.storage.CreateCategory(userID.(int), category.Name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, createdCategory)
+}
+
+func (h *Handler) GetCategories(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+	categories, err := h.storage.GetCategories(userID.(int))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, categories)
+}
+
+func (h *Handler) UpdateCategory(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category id"})
+		return
+	}
+
+	var category models.Category
+	if err := c.ShouldBindJSON(&category); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if category.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category name is required"})
+		return
+	}
+
+	updated, err := h.storage.UpdateCategory(id, userID.(int), category.Name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !updated {
+		c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"id": id, "user_id": userID, "name": category.Name})
+}
+
+func (h *Handler) DeleteCategory(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category id"})
+		return
+	}
+
+	deleted, err := h.storage.DeleteCategory(id, userID.(int))
+	if err != nil {
+		if strings.Contains(err.Error(), "category is used in transactions") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category is used in transactions"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 func (h *Handler) GetTransactions(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -146,15 +261,39 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 	}
 
 	filterType := c.Query("type")
+	filterCategoryIDStr := c.Query("category_id")
 	minAmountStr := c.Query("min_amount")
 	maxAmountStr := c.Query("max_amount")
 	sort := c.Query("sort")
 	pageStr := c.Query("page")
 	limitStr := c.Query("limit")
 
+	var filterCategoryID int
 	var minAmount, maxAmount float64
 	var page, limit int
 	var err error
+
+	if filterCategoryIDStr != "" {
+		filterCategoryID, err = strconv.Atoi(filterCategoryIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category_id"})
+			return
+		}
+		if filterCategoryID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category_id must be positive"})
+			return
+		}
+		// Проверяем, существует ли категория и принадлежит ли она пользователю
+		category, err := h.storage.GetCategory(filterCategoryID, userID.(int))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if category == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category does not exist or does not belong to user"})
+			return
+		}
+	}
 
 	if minAmountStr != "" {
 		minAmount, err = strconv.ParseFloat(minAmountStr, 64)
@@ -202,7 +341,7 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 		}
 	}
 
-	transactions, total, err := h.storage.GetTransactions(userID.(int), filterType, minAmount, maxAmount, sort, page, limit)
+	transactions, total, err := h.storage.GetTransactions(userID.(int), filterType, filterCategoryID, minAmount, maxAmount, sort, page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -312,6 +451,18 @@ func (h *Handler) UpdateTransaction(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Проверяем существование транзакции до валидации
+	transaction, err := h.storage.GetTransaction(id, userID.(int))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if transaction == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "transaction not found"})
+		return
+	}
+
 	var updatedTransaction models.Transaction
 	if err := c.ShouldBindJSON(&updatedTransaction); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

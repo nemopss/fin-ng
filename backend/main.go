@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	gin.SetMode(gin.ReleaseMode)
 	if err := godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file")
 	}
@@ -42,6 +43,10 @@ func main() {
 	protected.POST("/transactions", handler.CreateTransaction)
 	protected.DELETE("/transaction/:id", handler.DeleteTransaction)
 	protected.PUT("/transaction/:id", handler.UpdateTransaction)
+	protected.POST("/categories", handler.CreateCategory)
+	protected.GET("/categories", handler.GetCategories)
+	protected.PUT("/categories/:id", handler.UpdateCategory)
+	protected.DELETE("/categories/:id", handler.DeleteCategory)
 
 	r.Run()
 }
