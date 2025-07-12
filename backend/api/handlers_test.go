@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
+	//"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/nemopss/fin-ng/backend/db"
 	"github.com/nemopss/fin-ng/backend/models"
@@ -21,9 +21,9 @@ import (
 func setupTestHandler(t *testing.T) (*gin.Engine, *db.Storage) {
 	gin.SetMode(gin.ReleaseMode)
 	// Загружаем переменные окружения из файла .env
-	if err := godotenv.Load("../.env"); err != nil {
+	/* 	if err := godotenv.Load("../.env"); err != nil {
 		t.Fatalf("Error loading .env file: %v", err)
-	}
+	} */
 
 	// Получаем строку подключения к тестовой базе данных
 	connStr := os.Getenv("POSTGRES_TEST_URL")
@@ -60,6 +60,7 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *db.Storage) {
 	protected.PUT("/transaction/:id", handler.UpdateTransaction)
 	protected.POST("/categories", handler.CreateCategory)
 	protected.GET("/categories", handler.GetCategories)
+	protected.GET("/categories/:id", handler.GetCategory)
 	protected.PUT("/categories/:id", handler.UpdateCategory)
 	protected.DELETE("/categories/:id", handler.DeleteCategory)
 
@@ -371,6 +372,68 @@ func TestCategories(t *testing.T) {
 
 	// Тестируем доступ к категориям без токена
 	req, _ = http.NewRequest("GET", "/categories", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// Ожидаем ошибку 401 Unauthorized
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	}
+}
+
+// TestGetTransaction тестирует получение конкретной категории по ID.
+func TestGetCategory(t *testing.T) {
+	r, storage := setupTestHandler(t)
+	defer storage.Close()
+
+	// Создаем тестового пользователя
+	user, err := storage.CreateUser("testuser", "password123")
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
+	// Получаем токен
+	token := getToken(t, r, "testuser", "password123")
+
+	// Создаем категорию
+	category, err := storage.CreateCategory(user.ID, "food")
+	if err != nil {
+		t.Fatalf("Failed to create category: %v", err)
+	}
+
+	// Тестируем получение транзакции
+	req, _ := http.NewRequest("GET", "/categories/1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// Проверяем успешное получение (200 OK)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var fetchedCategory models.Category
+	// Проверяем, что данные транзакции совпадают
+	if err := json.NewDecoder(w.Body).Decode(&fetchedCategory); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if fetchedCategory.UserID != user.ID || fetchedCategory.ID != category.ID || fetchedCategory.Name != "food" {
+		t.Errorf("Expected category with user_id = %d, category_id = %d, name = %s", user.ID, category.ID, category.Name)
+	}
+
+	// Тестируем запрос несуществующей транзакции
+	req, _ = http.NewRequest("GET", "/categories/999", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// Ожидаем ошибку 404 Not Found
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+
+	// Тестируем запрос без токена
+	req, _ = http.NewRequest("GET", "/categories/1", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

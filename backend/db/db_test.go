@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/joho/godotenv"
+	//	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/nemopss/fin-ng/backend/models"
 	"golang.org/x/crypto/bcrypt"
@@ -15,9 +15,9 @@ import (
 // Очищает таблицы перед тестами для обеспечения чистого состояния.
 func setupTestDB(t *testing.T) *Storage {
 	// Загружаем переменные окружения из файла .env
-	if err := godotenv.Load("../.env"); err != nil {
+	/* if err := godotenv.Load("../.env"); err != nil {
 		t.Fatalf("Error loading .env file: %v", err)
-	}
+	} */
 
 	// Получаем строку подключения к тестовой базе данных
 	connStr := os.Getenv("POSTGRES_TEST_URL")
