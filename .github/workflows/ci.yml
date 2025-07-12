@@ -29,17 +29,27 @@ jobs:
           --health-retries 5
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: "backend/go.mod"
+          go-version: '1.24.4'
+
+      - name: Wait for PostgreSQL
+        run: |
+          until PGPASSWORD=${{ secrets.POSTGRES_PASSWORD }} psql -h localhost -U ${{ secrets.POSTGRES_USER }} -d postgres -c '\q'; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
 
       - name: Create test database
         run: |
-          PGPASSWORD=${{ secrets.POSTGRES_PASSWORD }} psql -h localhost -U ${{ secrets.POSTGRES_USER }} -d ${{ secrets.POSTGRES_DB }} -c "CREATE DATABASE finance_tracker_test;"
+          PGPASSWORD=${{ secrets.POSTGRES_PASSWORD }} psql -h localhost -U ${{ secrets.POSTGRES_USER }} -d postgres -c "CREATE DATABASE finance_tracker_test;"
+
+      - name: Test database connection
+        run: |
+          PGPASSWORD=${{ secrets.POSTGRES_PASSWORD }} psql -h localhost -U ${{ secrets.POSTGRES_USER }} -d finance_tracker_test -c "SELECT 1;"
 
       - name: Run tests
         env:
