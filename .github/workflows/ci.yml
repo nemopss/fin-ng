@@ -37,6 +37,10 @@ jobs:
         with:
           go-version-file: "backend/go.mod"
 
+      - name: Create test database
+        run: |
+          PGPASSWORD=${{ secrets.POSTGRES_PASSWORD }} psql -h localhost -U ${{ secrets.POSTGRES_USER }} -d ${{ secrets.POSTGRES_DB }} -c "CREATE DATABASE finance_tracker_test;"
+
       - name: Run tests
         env:
           POSTGRES_TEST_URL: ${{ secrets.POSTGRES_TEST_URL }}
