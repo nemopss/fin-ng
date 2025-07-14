@@ -42,7 +42,7 @@ jobs:
       - name: Wait for services to be ready
         run: |
           sleep 30  
-          docker exec fin-ng-db pg_isready -U ${{ secrets.POSTGRES_USER }} -d ${{POSTGRES_DB }}
+          docker exec fin-ng-db pg_isready -U ${{ secrets.POSTGRES_USER }} -d ${{ secrets.POSTGRES_DB }}
 
       - name: Debug container logs
         run: |
