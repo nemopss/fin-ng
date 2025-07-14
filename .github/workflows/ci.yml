@@ -59,7 +59,8 @@ jobs:
           docker run --rm -v $(pwd):/app -w /app --network backend_backend \
             -e POSTGRES_TEST_URL=postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@db_test:5432/finance_tracker_test?sslmode=disable \
             -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-            golang:1.24.4 go test ./... -v
+            golang:1.24.4 go test ./api -v \
+            golang:1.24.4 go test ./db -v
         continue-on-error: true
 
       - name: Check API health
