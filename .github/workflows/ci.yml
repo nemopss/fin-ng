@@ -53,7 +53,7 @@ jobs:
       - name: Run tests (optional)
         run: |
           cd backend
-          docker exec fin-ng-backend go test ./... -v
+          docker run --rm -v $(pwd):/app -w /app --network backend_backend golang:1.24.4 go test ./... -v
         continue-on-error: true
 
       - name: Check API health
