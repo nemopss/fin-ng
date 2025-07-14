@@ -12,7 +12,7 @@ COPY . .
 RUN go build -o app ./main.go
 
 # Итоговый образ
-alpine:latest
+FROM alpine:latest
 
 # Установка совместимости с glibc, если требуется
 RUN apk add --no-cache libc6-compat
