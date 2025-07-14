@@ -1,5 +1,5 @@
 # Этап сборки
-golang:1.24.4 AS builder
+FROM golang:1.24.4 AS builder
 
 WORKDIR /app
 
