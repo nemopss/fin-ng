@@ -33,9 +33,29 @@ services:
     networks:
       - backend
 
+  db_test:
+    image: postgres:15
+    container_name: fin-ng-db-test
+    restart: always
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=finance_tracker_test
+    volumes:
+      - db_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d finance_tracker_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
 networks:
   backend:
     driver: bridge
 
 volumes:
   db_data:
+  db_test_data:
